@@ -12,26 +12,46 @@ const appEvents = getAppEvents()
 import './AskGPT.css'
 import { findLastVisibleTextNode, getDeepFlowDatasource } from 'utils/tools'
 
+type SupportedLanguage = 'en' | 'id'
+
+interface LanguageOption {
+  label: string
+  value: SupportedLanguage
+}
+
+const LANGUAGE_OPTIONS: LanguageOption[] = [
+  { label: 'English', value: 'en' },
+  { label: 'Indonesian', value: 'id' },
+]
+
+function getTopoSystemContent(language: SupportedLanguage): string {
+  const languageDirective = language === 'en'
+    ? 'Output your analysis in English.'
+    : 'Output your analysis in Indonesian (Bahasa Indonesia).'
+
+  return `
+  Based on the provided network topology JSON, the links describe access relationships between nodes. The metricValue represents the main metric value for the access; there will be a matching value in the data whose corresponding key indicates what the metric is.
+  Fields prefixed with client_ represent the client side, and fields prefixed with server_ represent the server side. Nodes with the same node_type and resource_id are the same node.
+  Please analyze according to the following steps:
+  1. Consolidate the links into appropriate nodes and construct the access relationships between them. Carefully verify that each relationship is consistent with the original data. You may describe frequently accessed nodes, for example: Node A is accessed by 10 other nodes. However, do not list more than 5 frequently accessed nodes.
+  2. Based on the access relationships constructed in step 1, analyze whether certain nodes are access focal points or bottlenecks. Output all discovered focal points and bottlenecks, making sure to include all problematic nodes.
+  3. For the nodes identified in step 2, retrieve their corresponding id, name, and node_type, and place them as pure JSON at the end of the output. Do not include any other markup or text describing that it is JSON.
+
+  ---
+  Note: You must analyze all the data. Do not repeat the step descriptions; just output the corresponding results.
+  ====
+  After outputting the results, restructure them as follows:
+  I need to perform secondary processing on the JSON within the output. The entire text should read naturally and without any ambiguity if the JSON is removed. For example, do not include phrases like "Below is the JSON array output for the identified issues" or similar statements. Analyze the entire response, output the content, and append the JSON separately at the end.
+
+  ${languageDirective}
+`
+}
+
 interface Props {
   data: {
     links?: any[]
   }
 }
-
-const system_content = `
-  根据提供的网络的拓扑结构JSON，links描述了节点之间的访问关系。其中metricValue是表示访问的主要指标值，在数据里会有一个一样的值，对应的key说明是啥指标。
-  client_开头的表示客户端，server_开头的表示服务端。相同node_type和resource_id的说明是同一个节点。
-  接下来，请按照如下步骤进行分析：
-  1. links整合为合适的节点，构建出节点之间的访问关系，仔细检查每个关系是否和原始数据一致。可以适当描述被频繁描述的节点，例如：节点A被10个其他节点访问。但罗列的频繁节点不要超过5个。
-  2. 通过1中构建的访问关系，分析是否存在一些节点是访问的焦点和瓶颈，此步骤输出发现的焦点和瓶颈，注意要输出所有有问题的节点。
-  3. 根据2中发现的节点，获取其对应的id,name,node_type，用纯的JSON放到输出的结尾，除此之外不要带有其他标记或者文字描述说明这是一段JSON。
-
-  ---
-  注意，分析数据需要分析所有数据，同时使用中文输出结果，不用重复说明步骤，输出对应结果即可。
-  ====
-  输出结果后，对结果进行重整下：
-  我需要对里面的JSON二次处理，希望整句话移除这个JSON后，语句语序没有任何问题和误解。例如，不要出现 "以下是对应问题的JSON数组输出"或类似语句。将整个语句分析后，把内容输出，将JSON单独附加到结尾
-`
 
 export const AskGPT: React.FC<Props> = ({ data }) => {
   const { links } = data
@@ -45,6 +65,7 @@ export const AskGPT: React.FC<Props> = ({ data }) => {
   const [drawerData, setDrawerData] = useState<any>(DEFAULT_STATE)
   const onClose = () => {
     setVisible(false)
+    setLanguage('en')
     streamerCache?.cleanup()
     streamerCache?.end()
   }
@@ -183,7 +204,7 @@ export const AskGPT: React.FC<Props> = ({ data }) => {
       }
       const engine = JSON.parse(checkedAiEngine)
       const postData = {
-        system_content,
+        system_content: getTopoSystemContent(language),
         user_content: JSON.stringify(
           links?.map(e => {
             return _.omit(e, ['from', 'to', 'metrics', 'metricsGroup'])
@@ -231,6 +252,7 @@ export const AskGPT: React.FC<Props> = ({ data }) => {
     return 'Start Request'
   }, [errorMsg, drawerData.inRequest, drawerData.answer])
 
+  const [language, setLanguage] = useState<SupportedLanguage>('en')
   const [aiEngines, setAiEngines] = useState<any[]>([])
   const [checkedAiEngine, setCheckedAiEngine] = useState<any>('')
   const getAiEngines = async () => {
@@ -330,6 +352,16 @@ export const AskGPT: React.FC<Props> = ({ data }) => {
                   placeholder="Select an AI engine"
                   noOptionsMessage="No Engines"
                   isOptionDisabled={(option: SelectableValue<any>) => option.disabled}
+                />
+              </InlineField>
+              <InlineField label="Language:">
+                <Select
+                  width="auto"
+                  options={LANGUAGE_OPTIONS}
+                  value={language}
+                  onChange={(v: any) => {
+                    setLanguage(v.value)
+                  }}
                 />
               </InlineField>
             </div>

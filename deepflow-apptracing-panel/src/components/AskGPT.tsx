@@ -12,35 +12,53 @@ const appEvents = getAppEvents()
 import './AskGPT.css'
 import { findLastVisibleTextNode, getDeepFlowDatasource } from 'utils/tools'
 
+type SupportedLanguage = 'en' | 'id'
+
+interface LanguageOption {
+  label: string
+  value: SupportedLanguage
+}
+
+const LANGUAGE_OPTIONS: LanguageOption[] = [
+  { label: 'English', value: 'en' },
+  { label: 'Indonesian', value: 'id' },
+]
+
+function getTracingSystemContent(language: SupportedLanguage): string {
+  const languageDirective = language === 'en'
+    ? 'Output your analysis in English.'
+    : 'Output your analysis in Indonesian (Bahasa Indonesia).'
+
+  return `
+  You are an application architecture expert, well-versed in containerized microservice applications and familiar with k8s operations.
+  I have an application call chain tracing result in JSON format. This result shows how an application request traverses various nodes, along with the monitoring data for each node.
+  The data format is a JSON array where deepflow_span_id is the current span's id, deepflow_parent_span_id is the parent span's id, and the entire call chain is linked through these two fields. If a span's deepflow_parent_span_id is an empty string, it is the initial span.
+  Focus on start_time_us, end_time_us, and selftime - all in microseconds. These represent the span's start time, end time, and self-consumed time. Generally, a parent node's start and end times encompass the child node's start and end times.
+  Based on the input, evaluate the result concisely, identifying the most likely problematic resources and causes.
+  We primarily care about service and resource related spans: service spans have the auto_service field, and resource spans have the auto_instance field. In the results, we only care about these spans, and we use the corresponding auto_service or auto_instance as their names.
+  If there are other spans between two service or resource spans, those are intermediate access nodes.
+  Pay special attention to the following:
+  1. If a span has multiple child spans with identical call content, this is typically a loop call. Count the identical child spans and report it as an issue, including which node it is, which identical child span was called, and how many times.
+
+  ---
+  Output requirements (be concise):
+  1. What issues exist in the entire call chain. Provide accurate time and data to illustrate problems. We only care about service or resource spans - use the corresponding auto_service or auto_instance as names when describing them.
+  2. Which services or resources have outstanding issues. Provide accurate time and data to illustrate problems.
+  3. In items 1 and 2, list all problematic areas you identify. Minimize omissions unless there are too many.
+  4. Output a JSON array containing problematic services with simple text descriptions. Place this as pure JSON at the end of the output. Do not include any other markup or text describing that it is JSON.
+  ====
+  After outputting the results, restructure them as follows:
+  I need to perform secondary processing on the JSON within the output. The entire text should read naturally and without any ambiguity if the JSON is removed. For example, do not include phrases like "Below is the JSON array output for the identified issues" or similar statements. Analyze the entire response, output the content, and append the JSON separately at the end.
+
+  ${languageDirective}
+`
+}
+
 interface Props {
   data: {
     tracing?: any[]
   }
 }
-
-const system_content = `
-  你是一个应用架构方面的专家，对容器化的微服务应用有充分了解，同时熟悉k8s运维。
-  我有一个应用调用链追踪的结果JSON，这个结果表明了一个应用请求如何穿过各个节点，以及各个节点对应的监控数据。
-  数据的格式为一个JSON数组，其中deepflow_span_id表示当前span的id，deepflow_parent_span_id表示其父亲span的id，整个调用链通过这两个字段链接起来，如果一个span的deepflow_parent_span_id为空字符串，那么它就是初始的span。
-  我们只看start_time_us、end_time_us，selftime
-  , 单位都是us。这表示这个span开始时间和结束时间和自身消耗的时间。一般的，父节点的开始和结束时间都包围着子节点的开始和结束时间。
-  请根据我输入的内容对这个结果进行评估，用精简的方式给出你觉得最可能有问题的资源和原因。
-  我们主要关心服务和资源相关的信息，服务对应的span有auto_service这个字段，资源对应的span有auto_instance这个字段。在结果里，我们只关心这些span，这些span也用对应的auto_service或auto_instance作为名称。
-  如果两个服务或者资源span之间有其他span，这些span都是它们的中间访问节点。
-  额外注意如下一些问题：
-  1. 如果同一个span有多个相同调用内容的子span，这一般是个循环调用，需要做下相同内容子span的计数，并作为一个问题输出，包含这个节点是谁，调用了哪个相同的子span多少次
-
-  ---
-  回答务必精简，输出内容包括：
-  1. 整个调用链有哪些问题，注意给出准确的时间和数据用于说明问题。我们只关心服务或者资源的span，描述这些span时，也使用对应的auto_service或者auto_instance作为名称。
-  2. 有哪些服务或者资源有突出的问题，注意给出准确的时间和数据用于说明问题
-  3. 1和2中，描述问题需要把你觉得有问题的地方都列出来，尽量少省略，除非数量很多
-  4. 输出一个JSON的数组，包含有问题的服务和对应的简单文本描述。注意此项输出用纯的JSON放到输出的结尾，除此之外不要带有其他标记或者文字描述说明这是一段JSON。
-  5. 用中文输出结果。对输出的结果重复检查下规则4。
-  ====
-  输出结果后，对结果进行重整下：
-  我需要对里面的JSON二次处理，希望整句话移除这个JSON后，语句语序没有任何问题和误解。例如，不要出现 "以下是对应问题的JSON数组输出"或类似语句。将整个语句分析后，把内容输出，将JSON单独附加到结尾
-`
 
 export const AskGPT: React.FC<Props> = ({ data }) => {
   const { tracing } = data
@@ -54,6 +72,7 @@ export const AskGPT: React.FC<Props> = ({ data }) => {
   const [drawerData, setDrawerData] = useState<any>(DEFAULT_STATE)
   const onClose = () => {
     setVisible(false)
+    setLanguage('en')
     streamerCache?.cleanup()
     streamerCache?.end()
   }
@@ -192,7 +211,7 @@ export const AskGPT: React.FC<Props> = ({ data }) => {
       }
       const engine = JSON.parse(checkedAiEngine)
       const postData = {
-        system_content,
+        system_content: getTracingSystemContent(language),
         user_content: JSON.stringify(tracing)
       }
       // @ts-ignore
@@ -236,6 +255,7 @@ export const AskGPT: React.FC<Props> = ({ data }) => {
     return 'Start Request'
   }, [errorMsg, drawerData.inRequest, drawerData.answer])
 
+  const [language, setLanguage] = useState<SupportedLanguage>('en')
   const [aiEngines, setAiEngines] = useState<any[]>([])
   const [checkedAiEngine, setCheckedAiEngine] = useState<any>('')
   const getAiEngines = async () => {
@@ -335,6 +355,16 @@ export const AskGPT: React.FC<Props> = ({ data }) => {
                   placeholder="Select an AI engine"
                   noOptionsMessage="No Engines"
                   isOptionDisabled={(option: SelectableValue<any>) => option.disabled}
+                />
+              </InlineField>
+              <InlineField label="Language:">
+                <Select
+                  width="auto"
+                  options={LANGUAGE_OPTIONS}
+                  value={language}
+                  onChange={(v: any) => {
+                    setLanguage(v.value)
+                  }}
                 />
               </InlineField>
             </div>
